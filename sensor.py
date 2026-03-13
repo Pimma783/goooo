@@ -1,93 +1,84 @@
-"""
-===============================================================
-  ตรวจจับวัตถุด้วย MH-Sensor Flying-Fish (3 ขา)
-  Raspberry Pi Pico - MicroPython (Best Practice Version)
-===============================================================
-  การต่อวงจร (ยึดตามเลข GP เป็นหลัก):
-  Flying-Fish      Raspberry Pi Pico
-  VCC       ->     3.3V  (Pin 36)
-  GND       ->     GND   (Pin 38)
-  OUT       ->     GP14  (Physical Pin 19)
-
-  LED แจ้งเตือน ->   GP15  (Physical Pin 20)
-===============================================================
-"""
-
 from machine import Pin
 import utime
 
 # ============================================================
-# 1. ตั้งค่า Pin (ใช้เลข GP เสมอ!)
+# 1. ตั้งค่า Pin
 # ============================================================
-SENSOR_PIN = 14  # ใช้เลข 14 สำหรับ GP14
-LED_PIN = 15  # ใช้เลข 15 สำหรับ GP15
+SENSOR_PIN = 14
+LED_PIN = 15
 
 sensor = Pin(SENSOR_PIN, Pin.IN, Pin.PULL_UP)
 ext_led = Pin(LED_PIN, Pin.OUT)
 
-# รองรับทั้ง Pico ธรรมดา (Pin 25) และ Pico W (Pin "LED")
+# ตรวจสอบประเภทบอร์ดเพื่อเปิด Onboard LED
 try:
     onboard_led = Pin("LED", Pin.OUT)
-except TypeError:
+except (TypeError, ValueError):
     onboard_led = Pin(25, Pin.OUT)
 
-
 # ============================================================
-# 2. ฟังก์ชันหลัก
+# 2. ฟังก์ชันเสริม
 # ============================================================
-def is_detected() -> bool:
+def get_stable_state() -> bool:
     """
-    อ่านค่าจากเซ็นเซอร์
-    เซ็นเซอร์เป็นแบบ Active LOW:
-    - อ่านได้ 0 = มีวัตถุบัง (Return True)
-    - อ่านได้ 1 = ไม่มีวัตถุ (Return False)
+    อ่านค่าแบบ Debounce: เช็คซ้ำ 3 ครั้งเพื่อให้แน่ใจว่าไม่ใช่สัญญาณรบกวน
+    Returns: True ถ้าพบวัตถุ (Active LOW), False ถ้าไม่พบ
     """
-    return sensor.value() == 0
-
+    first_read = sensor.value()
+    utime.sleep_ms(5) # รอแป๊บเดียวเพื่อเช็คซ้ำ
+    second_read = sensor.value()
+    
+    # ถ้าอ่านได้ 0 ทั้งสองรอบ แสดงว่าเจอวัตถุจริงๆ (ไม่ใช่ Noise)
+    if first_read == 0 and second_read == 0:
+        return True
+    return False
 
 def set_led(state: bool):
-    """สั่งเปิด-ปิด LED ทั้งบนบอร์ดและต่อแยก"""
-    val = 1 if state else 0  # ถ้า state เป็น True ให้ส่ง 1 (ไฟติด)
+    """สั่งเปิด-ปิด LED ทั้งหมด"""
+    val = 1 if state else 0
     ext_led.value(val)
     onboard_led.value(val)
-
 
 # ============================================================
 # 3. Main Program
 # ============================================================
 def main():
     print("=" * 40)
-    print("  System Ready: Object Detection")
+    print("  System Ready: Object Detection (Stable Version)")
     print("  Sensor: GP14 | LED: GP15")
     print("=" * 40)
 
-    # ปิดไฟ LED ก่อนเริ่มทำงาน
     set_led(False)
 
-    # ตัวแปรเก็บสถานะ "ก่อนหน้า" เพื่อเช็คว่ามีการเปลี่ยนแปลงหรือไม่
-    # (ป้องกันการ Print รัวๆ ค้างหน้าจอ)
-    last_state = None
+    last_state = get_stable_state()
+    
+    if last_state:
+        print("ตรวจพบวัตถุ")
+        set_led(True)
+    else:
+        print("ระบบว่าง")
 
     while True:
-        # อ่านค่า "ปัจจุบัน" ในลูปทุกครั้ง
-        current_state = is_detected()
+        current_state = get_stable_state()
 
-        # ทำงานก็ต่อเมื่อสถานะ "เปลี่ยนไปจากเดิม" เท่านั้น (Edge Detection)
         if current_state != last_state:
-            if current_state == True:
-                print("[ Alert ] พบวัตถุ!")
-                set_led(True)  # เปิดไฟ
+            if current_state:
+                print("[ Alert ] พบวัตถุ! (Detected)")
+                set_led(True)
             else:
-                print("[ Info ] วัตถุหายไปแล้ว")
-                set_led(False)  # ปิดไฟ
+                print("[ Info ] วัตถุออกไปแล้ว (Cleared)")
+                set_led(False)
 
-            # อัปเดตสถานะก่อนหน้า ให้เท่ากับสถานะปัจจุบัน
+            # อัปเดตสถานะ
             last_state = current_state
 
-        # หน่วงเวลา 50 มิลลิวินาที (เพื่อให้บอร์ดไม่ทำงานหนักเกินไป และอ่านค่าได้เสถียร)
-        utime.sleep_ms(50)
+        # หน่วงเวลาลูปหลักเล็กน้อย
+        utime.sleep_ms(20)
 
-
-# สั่งรันฟังก์ชัน main
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # ปิดไฟก่อนออกจากโปรแกรมเมื่อกด Stop (Ctrl+C)
+        set_led(False)
+        print("\nSystem Stopped.")
